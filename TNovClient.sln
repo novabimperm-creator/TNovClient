@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.4.11626.88 stable
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TNovClient", "TNovClient.csproj", "{8D86E8F8-CD20-4A37-8952-252D6F9D3277}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		config1|Any CPU = config1|Any CPU
+		config2|Any CPU = config2|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{8D86E8F8-CD20-4A37-8952-252D6F9D3277}.config1|Any CPU.ActiveCfg = config1|Any CPU
+		{8D86E8F8-CD20-4A37-8952-252D6F9D3277}.config1|Any CPU.Build.0 = config1|Any CPU
+		{8D86E8F8-CD20-4A37-8952-252D6F9D3277}.config2|Any CPU.ActiveCfg = config2|Any CPU
+		{8D86E8F8-CD20-4A37-8952-252D6F9D3277}.config2|Any CPU.Build.0 = config2|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {61CA81DF-58CC-4102-AC95-075326C83BD6}
+	EndGlobalSection
+EndGlobal
