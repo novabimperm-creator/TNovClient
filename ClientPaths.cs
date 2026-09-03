@@ -43,6 +43,22 @@ namespace TNovClient
         public static string ServerPluginFolder(string serverPath, int revitYear) =>
             Path.Combine(NormalizeServerPath(serverPath), "actual", revitYear.ToString(), "TNov");
 
+        public static string ServerDesktopFolder(string serverPath) =>
+            Path.Combine(NormalizeServerPath(serverPath), "actual", "desktop");
+
+        public static string ServerDesktopApplication(string serverPath) =>
+            Path.Combine(ServerDesktopFolder(serverPath), "TNovDesktop.application");
+
+        public static string ServerClientFolder(string serverPath) =>
+            Path.Combine(NormalizeServerPath(serverPath), "actual", "client");
+
+        public static string ServerClientVersionFile(string serverPath) =>
+            Path.Combine(NormalizeServerPath(serverPath), "actual", "clientversion.txt");
+
+        public static string LocalClientExe => Path.Combine(ClientFolder, "TNovClient.exe");
+
+        public static string LocalClientDll => Path.Combine(ClientFolder, "TNovClient.dll");
+
         public static string ReleasesFile =>
             @"\\fs-nova\Distr\0.For Admin\_TNov\releases";
 

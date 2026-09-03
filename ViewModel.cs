@@ -9,8 +9,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Xml.Linq;
-using Newtonsoft.Json;
 
 namespace TNovClient
 {
@@ -72,13 +70,6 @@ namespace TNovClient
         {
             get => _isDesktopActionVisible;
             set { _isDesktopActionVisible = value; OnPropertyChanged(); }
-        }
-
-        private bool _opensInstallRequest;
-        public bool OpensInstallRequest
-        {
-            get => _opensInstallRequest;
-            set { _opensInstallRequest = value; OnPropertyChanged(); }
         }
 
         private string _desktopActionText = string.Empty;
@@ -181,8 +172,6 @@ namespace TNovClient
         public ICommand CloseConfigurationPickerCommand { get; set; }
         public ICommand SelectConfigurationCommand { get; set; }
 
-        private static readonly string[] ConfigurationDisplayNames = { "Пермь", "Хабаровск" };
-
         public ViewModel()
         {
             UpdCommand = new RelayCommand(_ => LoadModules(), CanUpd);
@@ -199,43 +188,24 @@ namespace TNovClient
             ReleaseEntries = new ObservableCollection<ReleaseEntry>();
             ConfigurationOptions = new ObservableCollection<ConfigurationOption>();
             LoadModules();
-            LoadReleases();
         }
 
         private void OpenConfigurationPicker()
         {
             ConfigurationOptions.Clear();
 
-            try
+            TNovConfig? currentConfig = files.LoadConfig();
+            foreach ((string displayName, TNovConfig config) in OfficeServers.GetAll())
             {
-                if (!File.Exists(ClientPaths.ConfigurationsFile))
+                ConfigurationOptions.Add(new ConfigurationOption
                 {
-                    Debug.WriteLine("Файл configs.json недоступен");
-                    return;
-                }
-
-                var configs = JsonConvert.DeserializeObject<List<TNovConfig>>(File.ReadAllText(ClientPaths.ConfigurationsFile));
-                if (configs == null || configs.Count == 0)
-                    return;
-
-                TNovConfig? currentConfig = files.LoadConfig();
-
-                for (int i = 0; i < configs.Count && i < ConfigurationDisplayNames.Length; i++)
-                {
-                    ConfigurationOptions.Add(new ConfigurationOption
-                    {
-                        DisplayName = ConfigurationDisplayNames[i],
-                        Config = configs[i],
-                        IsSelected = ConfigMatches(currentConfig, configs[i])
-                    });
-                }
-
-                ShowConfigurationPicker = true;
+                    DisplayName = displayName,
+                    Config = config,
+                    IsSelected = ConfigMatches(currentConfig, config)
+                });
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Ошибка загрузки списка конфигураций: {ex}");
-            }
+
+            ShowConfigurationPicker = true;
         }
 
         private void ApplyConfiguration(object parameter)
@@ -243,8 +213,12 @@ namespace TNovClient
             if (parameter is not ConfigurationOption option)
                 return;
 
+            TNovConfig? previous = files.LoadConfig();
             if (!files.SaveConfig(option.Config))
                 return;
+
+            ServerProbe.Invalidate(previous?.ServerPath);
+            ServerProbe.Invalidate(option.Config.ServerPath);
 
             foreach (ConfigurationOption item in ConfigurationOptions)
                 item.IsSelected = ReferenceEquals(item, option);
@@ -268,10 +242,7 @@ namespace TNovClient
             if (current == null || candidate == null)
                 return false;
 
-            return string.Equals(
-                ClientPaths.NormalizeServerPath(current.ServerPath),
-                ClientPaths.NormalizeServerPath(candidate.ServerPath),
-                StringComparison.OrdinalIgnoreCase);
+            return OfficeServers.PathsMatch(current.ServerPath, candidate.ServerPath);
         }
 
         private static string GetClientVersionText()
@@ -280,15 +251,37 @@ namespace TNovClient
             {
                 string localDll = Path.Combine(ClientPaths.ClientFolder, "TNovClient.dll");
                 if (File.Exists(localDll))
-                    return FileVersionInfo.GetVersionInfo(localDll).ProductVersion ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "?";
+                {
+                    FileVersionInfo info = FileVersionInfo.GetVersionInfo(localDll);
+                    if (TryFormatThreePartVersion(info.ProductVersion, out string fromProduct)
+                        || TryFormatThreePartVersion(info.FileVersion, out fromProduct))
+                        return fromProduct;
+                }
 
-                return Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "?";
+                return FormatThreePartVersion(Assembly.GetExecutingAssembly().GetName().Version);
             }
             catch
             {
-                return Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "?";
+                return FormatThreePartVersion(Assembly.GetExecutingAssembly().GetName().Version);
             }
         }
+
+        private static bool TryFormatThreePartVersion(string? value, out string formatted)
+        {
+            formatted = "?";
+            if (string.IsNullOrWhiteSpace(value))
+                return false;
+
+            string numeric = value.Split('+', '-')[0].Trim();
+            if (!Version.TryParse(numeric, out Version? version) || version == null)
+                return false;
+
+            formatted = FormatThreePartVersion(version);
+            return true;
+        }
+
+        private static string FormatThreePartVersion(Version? version) =>
+            version == null ? "?" : $"{version.Major}.{version.Minor}.{Math.Max(version.Build, 0)}";
 
         private void LoadModules()
         {
@@ -305,12 +298,27 @@ namespace TNovClient
                     return;
                 }
 
+                if (!servercheck.ServerCheck())
+                {
+                    ModuleGroups.Add(CreateGroup("Статус", new[]
+                    {
+                        new ModuleInfo
+                        {
+                            Name = "Нет подключения",
+                            CurrentVersion = "",
+                            ActualVersion = "",
+                            IsActual = false
+                        }
+                    }));
+                    return;
+                }
+
                 string serverPath = ClientPaths.NormalizeServerPath(config.ServerPath);
                 var groupsByYear = new Dictionary<int, List<ModuleInfo>>();
                 bool anyModuleLoaded = false;
 
                 ModuleInfo desktopModule = CreateDesktopModule(serverPath);
-                WindowWidth = desktopModule.OpensInstallRequest ? 450 : 380;
+                WindowWidth = desktopModule.IsDesktopActionVisible ? 410 : 380;
                 ModuleGroups.Add(CreateGroup("TNovDesktop", new[] { desktopModule }));
 
                 foreach (int revitYear in RevitInstallHelper.GetDeployTargetYears(serverPath))
@@ -396,213 +404,36 @@ namespace TNovClient
 
         private static ModuleInfo CreateDesktopModule(string serverPath)
         {
-            Version? actualAssemblyVersion = TryGetDesktopActualAssemblyVersion(serverPath);
-            Version? actualClickOnceVersion = TryGetDesktopActualClickOnceVersion(serverPath);
-            bool isInstalled = TryGetDesktopInstalledVersion(out Version? currentVersion, out bool usesClickOnceVersion);
-            Version? actualVersion = usesClickOnceVersion && actualClickOnceVersion != null
-                ? actualClickOnceVersion
-                : actualAssemblyVersion ?? actualClickOnceVersion;
-            bool isActual = isInstalled
-                && actualVersion != null
-                && currentVersion != null
-                && currentVersion.CompareTo(actualVersion) >= 0;
+            DesktopStatus status = DesktopUpdateService.GetStatus(serverPath);
 
             var module = new ModuleInfo
             {
                 Name = "TNovDesktop",
-                CurrentVersion = isInstalled ? FormatVersion(currentVersion) : "не установлен",
-                ActualVersion = FormatVersion(actualVersion),
-                IsActual = isActual || (isInstalled && actualVersion == null),
-                IsDesktopActionVisible = !isInstalled || !isActual
+                CurrentVersion = status.IsInstalled ? DesktopUpdateService.FormatVersion(status.CurrentVersion) : "не установлен",
+                ActualVersion = DesktopUpdateService.FormatVersion(status.ActualVersion),
+                IsActual = status.IsActual || (status.IsInstalled && status.ActualVersion == null),
+                IsDesktopActionVisible = !status.IsInstalled || !status.IsActual
             };
 
-            if (!isInstalled)
+            if (!status.IsInstalled)
             {
-                module.DesktopActionText = "Заявка на установку";
-                module.DesktopActionWidth = 130;
-                module.OpensInstallRequest = true;
+                module.DesktopActionText = "Установить";
+                module.DesktopActionWidth = 90;
+                module.DesktopActionToolTip = "Установит TNovDesktop через ClickOnce и добавит в автозагрузку";
             }
-            else if (!isActual)
+            else if (!status.IsActual)
             {
-                module.DesktopActionText = "?";
-                module.DesktopActionWidth = 26;
-                module.DesktopActionToolTip = "Для обновления закройте программу через трей и откройте снова через меню Пуск";
+                module.DesktopActionText = "Обновить";
+                module.DesktopActionWidth = 90;
+                module.DesktopActionToolTip = "Закроет TNovDesktop и установит обновление через TNovClient";
             }
 
             return module;
         }
 
-        private static Version? TryGetDesktopActualAssemblyVersion(string serverPath)
-        {
-            string desktopFolder = Path.Combine(serverPath, "actual", "desktop");
-            string versionFile = Path.Combine(desktopFolder, "version.txt");
-
-            try
-            {
-                if (File.Exists(versionFile) && Version.TryParse(File.ReadAllText(versionFile).Trim(), out Version? version))
-                    return version;
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"TNovDesktop assembly version read failed: {ex.Message}");
-                return null;
-            }
-        }
-
-        private static Version? TryGetDesktopActualClickOnceVersion(string serverPath)
-        {
-            string desktopFolder = Path.Combine(serverPath, "actual", "desktop");
-
-            try
-            {
-                string manifestFile = Path.Combine(desktopFolder, "TNovDesktop.application");
-                if (!File.Exists(manifestFile))
-                    return null;
-
-                return TryReadClickOnceManifestVersion(manifestFile);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"TNovDesktop ClickOnce version read failed: {ex.Message}");
-                return null;
-            }
-        }
-
-        private static bool TryGetDesktopInstalledVersion(out Version? version, out bool usesClickOnceVersion)
-        {
-            version = null;
-            usesClickOnceVersion = false;
-
-            if (!DesktopShortcutExists())
-                return false;
-
-            foreach (string exePath in GetDesktopExecutableCandidates())
-            {
-                try
-                {
-                    Version? assemblyVersion = AssemblyName.GetAssemblyName(exePath).Version;
-                    if (assemblyVersion != null)
-                    {
-                        version = assemblyVersion;
-                        return true;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"TNovDesktop version read failed ({exePath}): {ex.Message}");
-                }
-            }
-
-            foreach (string manifestPath in GetDesktopManifestCandidates())
-            {
-                Version? manifestVersion = TryReadClickOnceManifestVersion(manifestPath);
-                if (manifestVersion != null)
-                {
-                    version = manifestVersion;
-                    usesClickOnceVersion = true;
-                    return true;
-                }
-            }
-
-            return true;
-        }
-
-        private static bool DesktopShortcutExists()
-        {
-            string programs = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
-            string[] shortcuts =
-            {
-                Path.Combine(programs, "TNov", "TNovDesktop.appref-ms"),
-                Path.Combine(programs, "TNovDesktop.appref-ms"),
-                Path.Combine(programs, "TNovDesktop", "TNovDesktop.appref-ms")
-            };
-
-            return shortcuts.Any(File.Exists);
-        }
-
-        private static IEnumerable<string> GetDesktopExecutableCandidates()
-        {
-            string clickOnceCache = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Apps",
-                "2.0");
-
-            if (!Directory.Exists(clickOnceCache))
-                return Enumerable.Empty<string>();
-
-            try
-            {
-                return Directory.EnumerateFiles(clickOnceCache, "TNovDesktop.*", SearchOption.AllDirectories)
-                    .Where(path =>
-                        path.EndsWith("TNovDesktop.dll", StringComparison.OrdinalIgnoreCase)
-                        || path.EndsWith("TNovDesktop.exe", StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(File.GetLastWriteTimeUtc)
-                    .ToArray();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"TNovDesktop ClickOnce cache scan failed: {ex.Message}");
-                return Enumerable.Empty<string>();
-            }
-        }
-
-        private static IEnumerable<string> GetDesktopManifestCandidates()
-        {
-            string clickOnceCache = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Apps",
-                "2.0");
-
-            if (!Directory.Exists(clickOnceCache))
-                return Enumerable.Empty<string>();
-
-            try
-            {
-                return Directory.EnumerateFiles(clickOnceCache, "TNovDesktop.exe.manifest", SearchOption.AllDirectories)
-                    .OrderByDescending(File.GetLastWriteTimeUtc)
-                    .ToArray();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"TNovDesktop manifest scan failed: {ex.Message}");
-                return Enumerable.Empty<string>();
-            }
-        }
-
-        private static Version? TryReadClickOnceManifestVersion(string manifestFile)
-        {
-            try
-            {
-                XNamespace ns = "urn:schemas-microsoft-com:asm.v1";
-                string? manifestVersion = XDocument.Load(manifestFile)
-                    .Root?
-                    .Element(ns + "assemblyIdentity")?
-                    .Attribute("version")?
-                    .Value;
-
-                return Version.TryParse(manifestVersion, out Version? version) ? version : null;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"ClickOnce manifest version read failed ({manifestFile}): {ex.Message}");
-                return null;
-            }
-        }
-
-        private static string FormatVersion(Version? version) => version?.ToString() ?? "?";
-
         private static void OpenDesktopInstallRequest(object parameter)
         {
-            if (parameter is ModuleInfo module && !module.OpensInstallRequest)
-                return;
-
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "https://tnov.pm-nova.ru/?tab=requests",
-                UseShellExecute = true
-            });
+            _ = DesktopUpdateService.UpdateFromUiAsync();
         }
 
         private static string FormatModuleName(string name)
@@ -658,7 +489,7 @@ namespace TNovClient
             try
             {
                 string releasesFile = ClientPaths.ReleasesFile;
-                if (!File.Exists(releasesFile))
+                if (!ServerProbe.IsPathReachable(releasesFile))
                 {
                     JournalStatusMessage = "Журнал версий недоступен";
                     OnPropertyChanged(nameof(HasReleaseEntries));

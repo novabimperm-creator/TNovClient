@@ -21,6 +21,14 @@ namespace TNovClient
                 return;
             }
 
+            OfficeConfigurationGuard.TrySwitchIfWrongOffice();
+
+            if (ClientSelfUpdate.TryStartUpdateAndExit(ignoreCooldown: true))
+            {
+                Shutdown();
+                return;
+            }
+
             CreateAndShowMainWindow();
             _ = MonitorServerConnectionAsync();
         }
@@ -42,6 +50,9 @@ namespace TNovClient
 
                 await Task.Delay(30000);
             }
+
+            if (ClientSelfUpdate.TryStartUpdateAndExit(ignoreCooldown: true))
+                ForceShutdown();
         }
 
         public App()
@@ -77,7 +88,17 @@ namespace TNovClient
 
         public static void ForceShutdown()
         {
-            Current.Dispatcher.Invoke(() => Current.Shutdown());
+            Application current = Current;
+            if (current == null)
+            {
+                Environment.Exit(0);
+                return;
+            }
+
+            if (current.Dispatcher.CheckAccess())
+                current.Shutdown();
+            else
+                current.Dispatcher.Invoke(() => current.Shutdown());
         }
 
         private void Application_DispatcherUnhandledException(object sender,

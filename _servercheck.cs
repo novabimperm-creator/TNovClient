@@ -1,5 +1,5 @@
 ﻿using System;
-using System.IO;
+using System.Diagnostics;
 
 namespace TNovClient
 {
@@ -16,8 +16,7 @@ namespace TNovClient
                 if (config.LicenseType != "corp")
                     return true;
 
-                string serverPath = ClientPaths.NormalizeServerPath(config.ServerPath);
-                return File.Exists(Path.Combine(serverPath, "clientusage.txt"));
+                return ServerProbe.IsServerReachable(config.ServerPath);
             }
             catch (Exception ex)
             {

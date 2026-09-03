@@ -30,6 +30,16 @@ namespace TNovClient
 
             try { Replace(); }
             catch (Exception ex) { Debug.WriteLine($"Updater failed: {ex}"); }
+
+            try { DesktopUpdateService.TryApplyPendingUpdate(); }
+            catch (Exception ex) { Debug.WriteLine($"Desktop updater failed: {ex}"); }
+
+            try
+            {
+                if (ClientSelfUpdate.TryStartUpdateAndExit())
+                    App.ForceShutdown();
+            }
+            catch (Exception ex) { Debug.WriteLine($"Client self-update failed: {ex}"); }
         }
 
         public static bool AppRun() => Process.GetProcessesByName("Revit").Any();
@@ -64,7 +74,7 @@ namespace TNovClient
         public static void Replace()
         {
             TNovConfig config = LoadConfig();
-            if (config == null)
+            if (config == null || !servercheck.ServerCheck())
                 return;
 
             string serverPath = ClientPaths.NormalizeServerPath(config.ServerPath);
@@ -286,6 +296,16 @@ namespace TNovClient
                 return;
             }
 
+            if (!servercheck.ServerCheck())
+            {
+                currentversion = "Нет подключения";
+                actualversion = "-";
+                actualcompany = config.CorpName ?? "-";
+                nonactual = true;
+                brush = new SolidColorBrush(Colors.LightCoral);
+                return;
+            }
+
             string serverPath = ClientPaths.NormalizeServerPath(config.ServerPath);
             actualcompany = config.CorpName ?? string.Empty;
 
@@ -383,31 +403,7 @@ namespace TNovClient
             }
         }
 
-        private static TNovConfig CreateDefaultConfig()
-        {
-#if config1
-            return new TNovConfig
-            {
-                LicenseType = "corp",
-                CorpName = "ООО ПМ Новация",
-                ServerPath = @"\\fs-nova\Distr\0.For Admin\_TNov\"
-            };
-#elif config2
-            return new TNovConfig
-            {
-                LicenseType = "corp",
-                CorpName = "ООО Новация Восток",
-                ServerPath = @"\\fs27\NOVA-VOSTOK\NovaService\"
-            };
-#else
-            return new TNovConfig
-            {
-                LicenseType = "corp",
-                CorpName = "TNov",
-                ServerPath = @"\\fs-nova\Distr\0.For Admin\_TNov\"
-            };
-#endif
-        }
+        private static TNovConfig CreateDefaultConfig() => OfficeServers.CreateDefaultConfig();
 
         /// <summary>
         /// Разбор ProductVersion в System.Version (ровно 4 компонента).
@@ -561,7 +557,7 @@ namespace TNovClient
             private static void SyncRecentFiles(string sourceFolder, string targetFolder)
             {
                 TNovConfig config = LoadConfig();
-                if (config == null || config.LicenseType != "corp")
+                if (config == null || config.LicenseType != "corp" || !servercheck.ServerCheck())
                     return;
 
                 if (!Directory.Exists(sourceFolder) || !Directory.Exists(targetFolder))

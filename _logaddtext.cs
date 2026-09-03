@@ -9,7 +9,7 @@ namespace TNovClient
         public logaddtext(in DateTime dateTime, in string txt)
         {
             TNovConfig config = files.LoadConfig();
-            if (config == null)
+            if (config == null || !servercheck.ServerCheck())
                 return;
 
             string serverPath = ClientPaths.NormalizeServerPath(config.ServerPath);

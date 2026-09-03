@@ -66,6 +66,15 @@ namespace TNovClient
 
         private async Task RunUpdaterLoopAsync(CancellationToken token)
         {
+            try
+            {
+                Updater();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Ошибка первого цикла обновлений: {ex}");
+            }
+
             while (!token.IsCancellationRequested)
             {
                 try
@@ -181,6 +190,9 @@ namespace TNovClient
         private void OpenMainWindow()
         {
             var vm = (ViewModel)DataContext;
+
+            try { DesktopUpdateService.TryApplyPendingUpdate(); }
+            catch (Exception ex) { Debug.WriteLine($"Desktop update on open failed: {ex}"); }
 
             if (vm.UpdCommand.CanExecute(null))
                 vm.UpdCommand.Execute(null);
