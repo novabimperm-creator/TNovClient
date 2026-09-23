@@ -367,7 +367,10 @@ namespace TNovClient
 
             try
             {
-                return JsonConvert.DeserializeObject<TNovConfig>(File.ReadAllText(configPath));
+                TNovConfig config = JsonConvert.DeserializeObject<TNovConfig>(File.ReadAllText(configPath));
+                if (OfficeServers.UpgradeLegacyPath(config))
+                    SaveConfig(config);
+                return config;
             }
             catch (JsonException ex)
             {
