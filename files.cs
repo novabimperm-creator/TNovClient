@@ -396,7 +396,25 @@ namespace TNovClient
                 if (!Directory.Exists(configDir))
                     Directory.CreateDirectory(configDir);
 
-                File.WriteAllText(configPath, JsonConvert.SerializeObject(config, Formatting.Indented));
+                // Смена офиса подставляет готовый конфиг из OfficeServers без настроек API —
+                // не теряем их: API один на оба офиса.
+                if (config.ApiUrl == null && File.Exists(configPath))
+                {
+                    try
+                    {
+                        TNovConfig? existing = JsonConvert.DeserializeObject<TNovConfig>(File.ReadAllText(configPath));
+                        if (existing != null)
+                        {
+                            config.ApiUrl = existing.ApiUrl;
+                            config.ApiKey ??= existing.ApiKey;
+                            config.ChecklistStorage ??= existing.ChecklistStorage;
+                        }
+                    }
+                    catch (Exception) { }
+                }
+
+                File.WriteAllText(configPath, JsonConvert.SerializeObject(config, Formatting.Indented,
+                    new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore }));
                 return true;
             }
             catch (Exception ex)
