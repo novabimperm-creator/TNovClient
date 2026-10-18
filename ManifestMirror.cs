@@ -65,6 +65,9 @@ namespace TNovClient
         public static bool HasContent =>
             Directory.Exists(ActualFolder) && Directory.EnumerateFileSystemEntries(ActualFolder).Any();
 
+        /// <summary>Идёт синхронизация (загрузка) зеркала.</summary>
+        public static bool IsSyncing => Gate.CurrentCount == 0;
+
         /// <summary>Зеркало собрано по манифесту этой конфигурации.</summary>
         public static bool IsReady(TNovConfig config)
         {
@@ -163,16 +166,17 @@ namespace TNovClient
 
                 // Сначала всё изменённое — во временную папку, и только если скачалось всё,
                 // переносим в зеркало: иначе клиент мог бы поставить смесь старых и новых DLL.
+                // Уже скачанное в прерванной загрузке (выход клиента) берём из staging по хэшу.
                 string staging = Path.Combine(MirrorRoot, "staging");
-                if (Directory.Exists(staging))
-                    Directory.Delete(staging, recursive: true);
 
                 var pending = new List<string>();
                 foreach ((string relative, ManifestFile file) in remote)
                 {
                     if (Matches(Path.Combine(ActualFolder, relative), file))
                         continue;
-                    await DownloadAsync(config, relative, file, Path.Combine(staging, relative), token);
+                    string staged = Path.Combine(staging, relative);
+                    if (!Matches(staged, file))
+                        await DownloadAsync(config, relative, file, staged, token);
                     pending.Add(relative);
                 }
 

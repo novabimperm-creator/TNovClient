@@ -35,6 +35,18 @@ namespace TNovClient
                     return false;
                 }
 
+                // Запуск не из папки установки (сборка разработчика): Updater заменил бы
+                // установленный клиент и закрыл этот процесс.
+                string? running = Path.GetDirectoryName(Environment.ProcessPath);
+                if (running == null || !string.Equals(Path.GetFullPath(running).TrimEnd('\\'),
+                        Path.GetFullPath(ClientPaths.ClientFolder).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                // Зеркало ещё качается: выход из процесса оборвал бы загрузку, а клиент
+                // взял бы старую сборку с шары вместо той, что в манифесте.
+                if (ManifestMirror.IsSyncing)
+                    return false;
+
                 TNovConfig config = files.LoadConfig();
                 if (config == null)
                     return false;
@@ -49,11 +61,17 @@ namespace TNovClient
                 if (!File.Exists(serverDll))
                     return false;
 
-                // Решает хэш (как для плагина): доходит и откат версии. Версии — только для журнала.
+                // Клиент не откатываем (в отличие от плагина): ставим сборку не старше установленной,
+                // иначе новый клиент, поставленный до выпуска, откатился бы на старый с шары.
+                // Та же версия с другим содержимым (пересборка) — обновляем.
+                Version? server = TryReadPeFileVersion(serverDll);
+                Version? local = ReadLocalVersion();
+                if (server == null || (local != null && server.CompareTo(local) < 0))
+                    return false;
                 if (!files.FilesDiffer(ClientPaths.LocalClientDll, serverDll))
                     return false;
 
-                Log($"self-update needed: local={FormatVersion(ReadLocalVersion())} server={FormatVersion(TryReadPeFileVersion(serverDll))}");
+                Log($"self-update needed: local={FormatVersion(local)} server={FormatVersion(server)}");
                 return LaunchHelper(serverFolder);
             }
             catch (Exception ex)
