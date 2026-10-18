@@ -55,6 +55,14 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
+  <!-- Папка сборки (TNovBuild\client\<конфигурация>) — полный комплект клиента для выпуска
+       (TNovReleaser.exe, режим publish client): Updater собирается туда же, рядом —
+       скрипт ярлыка для install-client.bat / install-personal.bat. -->
+  <ItemGroup>
+    <ProjectReference Include="Updater\TNovClient.Updater.csproj" ReferenceOutputAssembly="false" />
+    <None Update="CreateShortcut.vbs" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <Resource Include="logo.ico">
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
