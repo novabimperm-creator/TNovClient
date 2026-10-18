@@ -85,7 +85,7 @@ namespace TNovClient
 
         /// <summary>
         /// Запускает локальный установщик (если есть на шаре) или страницу/файл с aka.ms.
-        /// UseShellExecute + Verb runas — запрос прав администратора.
+        /// Без Verb=runas: UAC, если нужен, покажет сам установщик.
         /// </summary>
         public static bool TryLaunchInstaller(out string error)
         {
@@ -97,8 +97,7 @@ namespace TNovClient
                     Process.Start(new ProcessStartInfo
                     {
                         FileName = localPath,
-                        UseShellExecute = true,
-                        Verb = "runas"
+                        UseShellExecute = true
                     });
                     return true;
                 }

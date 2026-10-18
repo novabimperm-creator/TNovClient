@@ -13,26 +13,27 @@ using Microsoft.Win32;
 namespace TNovClient
 {
     /// <summary>
-    /// Единственный канал обновления TNovDesktop: ClickOnce (.application) запускается
-    /// только когда процесс TNovDesktop уже завершён. Иначе ClickOnce ставит вторую копию.
-    /// Имя события выхода должно совпадать с TNovDesktop.App.ExitRequestEventName.
+    /// Установка и обновление TNovDesktop через ClickOnce.
+    /// Фон только уведомляет; .application запускается по кнопке и только если процесс уже завершён.
+    /// Иначе ClickOnce ставит вторую копию. Имя события выхода должно совпадать
+    /// с TNovDesktop.App.ExitRequestEventName.
     /// </summary>
     internal static class DesktopUpdateService
     {
         internal const string ExitRequestEventName = "TNovDesktop_ExitRequest";
         private const string StartupValueName = "TNovDesktop";
         private const string StartupRunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        private static readonly TimeSpan StatusCheckCooldown = TimeSpan.FromMinutes(15);
         private static readonly TimeSpan LaunchCooldown = TimeSpan.FromMinutes(3);
         private static readonly TimeSpan ShutdownWait = TimeSpan.FromSeconds(15);
         private static readonly TimeSpan FirstInstallWait = TimeSpan.FromSeconds(60);
 
         private static readonly object Gate = new();
+        private static DateTime _lastStatusCheckUtc = DateTime.MinValue;
         private static DateTime _lastLaunchUtc = DateTime.MinValue;
         private static string _lastAvailableNotifySignature = string.Empty;
         private static bool _updateInProgress;
-        private static int _installWaitRunning;
         private static bool _firstInstallNotified;
-        private static bool _missingRuntimeNotified;
 
         public static DesktopStatus GetStatus(string serverPath)
         {
@@ -47,70 +48,39 @@ namespace TNovClient
         }
 
         /// <summary>
-        /// Фоновый цикл TNovClient: если Desktop закрыт и есть обновление — ставим его.
-        /// Если открыт — только уведомляем, без запуска .application.
+        /// Фоновый цикл TNovClient: только уведомляет о первой установке или обновлении.
+        /// ClickOnce не запускается сам — это делает кнопка в окне клиента.
         /// </summary>
-        public static void TryApplyPendingUpdate()
+        public static void TryApplyPendingUpdate(bool ignoreCooldown = false)
         {
+            lock (Gate)
+            {
+                if (!ignoreCooldown && DateTime.UtcNow - _lastStatusCheckUtc < StatusCheckCooldown)
+                    return;
+                _lastStatusCheckUtc = DateTime.UtcNow;
+            }
+
             TNovConfig config = files.LoadConfig();
             if (config == null || !servercheck.ServerCheck())
                 return;
 
             string serverPath = ClientPaths.NormalizeServerPath(config.ServerPath);
+            DesktopStatus status = GetStatus(serverPath);
 
             if (IsDesktopRunning())
             {
-                DesktopStatus runningStatus = GetStatus(serverPath);
-                if (runningStatus.IsInstalled)
-                    EnsureDesktopAutostart();
-                Log($"skip: TNovDesktop is running. current={FormatVersion(runningStatus.CurrentVersion)} actual={FormatVersion(runningStatus.ActualVersion)}");
-                if (runningStatus.IsInstalled && !runningStatus.IsActual)
-                    NotifyAvailable(runningStatus);
+                Log($"skip: TNovDesktop is running. current={FormatVersion(status.CurrentVersion)} actual={FormatVersion(status.ActualVersion)}");
+                if (status.IsInstalled && !status.IsActual)
+                    NotifyAvailable(status);
                 return;
             }
 
-            DesktopStatus status = GetStatus(serverPath);
             if (!status.IsInstalled)
             {
-                if (!EnsureDesktopRuntimeReady(interactive: false))
-                    return;
-
-                if (!TryLaunchClickOnce(serverPath, out string installError))
-                {
-                    if (!installError.StartsWith("Слишком частый", StringComparison.Ordinal))
-                        Log($"first install launch failed: {installError}");
-                    return;
-                }
-
-                Log("not installed: launched first ClickOnce install");
-                if (!_firstInstallNotified)
-                {
-                    _firstInstallNotified = true;
-                    NotifyFirstInstall();
-                }
-                StartWaitForInstallAndStartup();
+                Log($"not installed: notify only. actual={FormatVersion(status.ActualVersion)}");
+                NotifyFirstInstall();
                 return;
             }
-
-            DesktopClickOnceCleanup.Result cleanup = DesktopClickOnceCleanup.RemoveDuplicates(
-                ClientPaths.ServerDesktopApplication(serverPath));
-            if (cleanup.RemovedCount > 0)
-                NotifyDuplicatesRemoved(cleanup);
-
-            if (cleanup.RequiresReinstall)
-            {
-                if (!EnsureDesktopRuntimeReady(interactive: false))
-                    return;
-
-                Log("cleanup requires reinstall, launching ClickOnce");
-                if (!TryLaunchClickOnce(serverPath, out string reinstallError, ignoreCooldown: true))
-                    Log($"reinstall launch failed: {reinstallError}");
-                else
-                    StartWaitForInstallAndStartup();
-                return;
-            }
-
-            EnsureDesktopAutostart();
 
             if (status.IsActual)
             {
@@ -119,11 +89,8 @@ namespace TNovClient
                 return;
             }
 
-            Log($"launching ClickOnce: {FormatVersion(status.CurrentVersion)} -> {FormatVersion(status.ActualVersion)}");
-            if (!EnsureDesktopRuntimeReady(interactive: false))
-                return;
-            if (!TryLaunchClickOnce(serverPath, out string error))
-                Log($"auto-update launch failed: {error}");
+            Log($"update available: {FormatVersion(status.CurrentVersion)} -> {FormatVersion(status.ActualVersion)}");
+            NotifyAvailable(status);
         }
 
         public static async Task UpdateFromUiAsync()
@@ -158,29 +125,26 @@ namespace TNovClient
                 DesktopStatus status = GetStatus(serverPath);
                 if (!status.IsInstalled)
                 {
-                    if (!EnsureDesktopRuntimeReady(interactive: true))
+                    if (!EnsureDesktopRuntimeReady())
                         return;
 
-                    if (Volatile.Read(ref _installWaitRunning) == 0)
+                    if (!TryLaunchClickOnce(serverPath, out string installError, ignoreCooldown: true, allowSetupFallback: true))
                     {
-                        if (!TryLaunchClickOnce(serverPath, out string installError, ignoreCooldown: true))
-                        {
-                            Ui(() => MessageBox.Show(
-                                string.IsNullOrEmpty(installError) ? "Не удалось запустить установщик TNovDesktop." : installError,
-                                "Установка TNovDesktop",
-                                MessageBoxButton.OK,
-                                MessageBoxImage.Error));
-                            return;
-                        }
-
-                        Ui(() =>
-                        {
-                            var notificationWindow = new NotificationWindow();
-                            notificationWindow.ShowNotification(
-                                "Установка TNovDesktop",
-                                "Подтвердите установку в окне ClickOnce, если оно появится.");
-                        });
+                        Ui(() => MessageBox.Show(
+                            string.IsNullOrEmpty(installError) ? "Не удалось запустить установщик TNovDesktop." : installError,
+                            "Установка TNovDesktop",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error));
+                        return;
                     }
+
+                    Ui(() =>
+                    {
+                        var notificationWindow = new NotificationWindow();
+                        notificationWindow.ShowNotification(
+                            "Установка TNovDesktop",
+                            "Подтвердите установку в окне ClickOnce, если оно появится.");
+                    });
 
                     bool installed = await WaitUntilShortcutExistsAsync(FirstInstallWait).ConfigureAwait(true);
                     if (!installed)
@@ -207,13 +171,13 @@ namespace TNovClient
                 if (status.IsActual)
                     return;
 
-                if (!EnsureDesktopRuntimeReady(interactive: true))
+                if (!EnsureDesktopRuntimeReady())
                     return;
 
                 if (IsDesktopRunning())
                 {
                     MessageBoxResult confirm = Ui(() => MessageBox.Show(
-                        "TNovDesktop будет закрыт и обновлён. Продолжить?",
+                        "TNovDesktop нужно закрыть перед обновлением. Отправить сигнал выхода?",
                         "Обновление TNovDesktop",
                         MessageBoxButton.YesNo,
                         MessageBoxImage.Question));
@@ -225,35 +189,16 @@ namespace TNovClient
                     bool exited = await WaitUntilDesktopExitsAsync(ShutdownWait).ConfigureAwait(true);
                     if (!exited)
                     {
-                        MessageBoxResult kill = Ui(() => MessageBox.Show(
-                            "TNovDesktop всё ещё работает. Завершить процесс принудительно?",
+                        Ui(() => MessageBox.Show(
+                            "TNovDesktop всё ещё работает. Закройте программу через значок в трее и нажмите «Обновить» снова.",
                             "Обновление TNovDesktop",
-                            MessageBoxButton.YesNo,
+                            MessageBoxButton.OK,
                             MessageBoxImage.Warning));
-
-                        if (kill != MessageBoxResult.Yes)
-                            return;
-
-                        KillDesktopProcesses();
-                        exited = await WaitUntilDesktopExitsAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(true);
-                        if (!exited)
-                        {
-                            Ui(() => MessageBox.Show(
-                                "Не удалось закрыть TNovDesktop. Закройте программу через значок в трее и нажмите «Обновить» снова.",
-                                "Обновление TNovDesktop",
-                                MessageBoxButton.OK,
-                                MessageBoxImage.Warning));
-                            return;
-                        }
+                        return;
                     }
                 }
 
-                DesktopClickOnceCleanup.Result cleanup = DesktopClickOnceCleanup.RemoveDuplicates(
-                    ClientPaths.ServerDesktopApplication(serverPath));
-                if (cleanup.RemovedCount > 0)
-                    NotifyDuplicatesRemoved(cleanup);
-
-                if (!TryLaunchClickOnce(serverPath, out string error, ignoreCooldown: true))
+                if (!TryLaunchClickOnce(serverPath, out string error, ignoreCooldown: true, allowSetupFallback: true))
                 {
                     Ui(() => MessageBox.Show(
                         string.IsNullOrEmpty(error) ? "Не удалось запустить установщик TNovDesktop." : error,
@@ -263,7 +208,6 @@ namespace TNovClient
                     return;
                 }
 
-                EnsureDesktopAutostart();
                 Ui(() =>
                 {
                     var notificationWindow = new NotificationWindow();
@@ -304,38 +248,19 @@ namespace TNovClient
         public static bool IsDesktopRunning() => GetDesktopProcesses().Length > 0;
 
         /// <summary>
-        /// Перед ClickOnce: без Windows Desktop Runtime TNovDesktop не запустится,
-        /// а bootstrapper setup.exe часто «тихо» падает без прав админа.
+        /// Перед ClickOnce: без Windows Desktop Runtime TNovDesktop не запустится.
         /// </summary>
-        private static bool EnsureDesktopRuntimeReady(bool interactive)
+        private static bool EnsureDesktopRuntimeReady()
         {
             if (DotNetDesktopRuntime.IsInstalled())
                 return true;
 
             Log($"missing {DotNetDesktopRuntime.DisplayName}");
 
-            if (!interactive)
-            {
-                if (!_missingRuntimeNotified)
-                {
-                    _missingRuntimeNotified = true;
-                    Ui(() =>
-                    {
-                        var notificationWindow = new NotificationWindow();
-                        notificationWindow.ShowNotification(
-                            "Нужна среда .NET для TNovDesktop",
-                            $"Не установлена {DotNetDesktopRuntime.DisplayName}.\nОткройте TNovClient и нажмите «Установить» — потребуется подтверждение прав администратора.",
-                            durationSeconds: 12);
-                    });
-                }
-
-                return false;
-            }
-
             MessageBoxResult answer = Ui(() => MessageBox.Show(
                 $"Для TNovDesktop нужна среда выполнения {DotNetDesktopRuntime.DisplayName}.\n\n" +
-                "Её установка требует прав администратора (UAC).\n\n" +
-                "Запустить установщик среды сейчас?\n" +
+                "Установка среды может запросить права администратора (UAC).\n\n" +
+                "Открыть установщик среды сейчас?\n" +
                 "После установки снова нажмите «Установить» / «Обновить».",
                 "Среда выполнения .NET",
                 MessageBoxButton.YesNo,
@@ -357,7 +282,7 @@ namespace TNovClient
             }
 
             string sourceHint = DotNetDesktopRuntime.TryFindLocalInstaller(out _)
-                ? "Запущен установщик с сетевого диска. Подтвердите UAC и дождитесь окончания установки."
+                ? "Открыт установщик с сетевого диска. Если появится запрос UAC — подтвердите и дождитесь окончания установки."
                 : "Открыта страница/файл загрузки Microsoft. Установите Windows Desktop Runtime и снова нажмите «Установить».";
 
             Ui(() =>
@@ -369,33 +294,18 @@ namespace TNovClient
             return false;
         }
 
-        private static void NotifyDuplicatesRemoved(DesktopClickOnceCleanup.Result cleanup)
-        {
-            var parts = new List<string>();
-            if (cleanup.RemovedIdentities > 0)
-                parts.Add($"установок в кэше: {cleanup.RemovedIdentities}");
-            if (cleanup.RemovedShortcuts > 0)
-                parts.Add($"ярлыков: {cleanup.RemovedShortcuts}");
-            if (cleanup.RemovedArpKeys > 0)
-                parts.Add($"записей в программах: {cleanup.RemovedArpKeys}");
-
-            Ui(() =>
-            {
-                var notificationWindow = new NotificationWindow();
-                notificationWindow.ShowNotification(
-                    "Удалены лишние копии TNovDesktop",
-                    string.Join(", ", parts));
-            });
-        }
-
         private static void NotifyFirstInstall()
         {
+            if (_firstInstallNotified)
+                return;
+
+            _firstInstallNotified = true;
             Ui(() =>
             {
                 var notificationWindow = new NotificationWindow();
                 notificationWindow.ShowNotification(
                     "Установка TNovDesktop",
-                    "Подтвердите установку в окне ClickOnce, если оно появится.");
+                    "TNovDesktop ещё не установлен.\nОткройте TNovClient и нажмите «Установить».");
             });
         }
 
@@ -411,11 +321,15 @@ namespace TNovClient
                 var notificationWindow = new NotificationWindow();
                 notificationWindow.ShowNotification(
                     "Доступно обновление TNovDesktop",
-                    $"{signature}\nЗакройте программу через трей — TNovClient установит обновление.");
+                    $"{signature}\nЗакройте программу через трей и нажмите «Обновить» в TNovClient.");
             });
         }
 
-        private static bool TryLaunchClickOnce(string serverPath, out string error, bool ignoreCooldown = false)
+        private static bool TryLaunchClickOnce(
+            string serverPath,
+            out string error,
+            bool ignoreCooldown = false,
+            bool allowSetupFallback = false)
         {
             error = string.Empty;
             lock (Gate)
@@ -437,16 +351,11 @@ namespace TNovClient
             string applicationPath = ClientPaths.ServerDesktopApplication(serverPath);
             string setupPath = Path.Combine(desktopFolder, "setup.exe");
 
-            var launchers = new List<(string FileName, string? Arguments)>();
+            var launchers = new List<string>();
             if (File.Exists(applicationPath))
-            {
-                string url = new Uri(applicationPath).AbsoluteUri;
-                launchers.Add(("rundll32.exe", "dfshim.dll,ShOpenVerbApplication " + url));
-                launchers.Add((applicationPath, null));
-            }
-
-            if (File.Exists(setupPath))
-                launchers.Add((setupPath, null));
+                launchers.Add(applicationPath);
+            if (allowSetupFallback && File.Exists(setupPath))
+                launchers.Add(setupPath);
 
             if (launchers.Count == 0)
             {
@@ -455,22 +364,18 @@ namespace TNovClient
             }
 
             var errors = new List<string>();
-            foreach ((string fileName, string? arguments) in launchers)
+            foreach (string fileName in launchers)
             {
                 try
                 {
-                    var startInfo = new ProcessStartInfo
+                    Process.Start(new ProcessStartInfo
                     {
                         FileName = fileName,
                         UseShellExecute = true
-                    };
-                    if (!string.IsNullOrEmpty(arguments))
-                        startInfo.Arguments = arguments;
-
-                    Process.Start(startInfo);
+                    });
                     lock (Gate)
                         _lastLaunchUtc = DateTime.UtcNow;
-                    Log($"launched {fileName} {arguments}");
+                    Log($"launched {fileName}");
                     return true;
                 }
                 catch (Exception ex)
@@ -513,21 +418,6 @@ namespace TNovClient
             }
 
             return !IsDesktopRunning();
-        }
-
-        private static void KillDesktopProcesses()
-        {
-            foreach (Process process in GetDesktopProcesses())
-            {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"TNovDesktop kill failed ({process.Id}): {ex.Message}");
-                }
-            }
         }
 
         private static Process[] GetDesktopProcesses()
@@ -647,36 +537,6 @@ namespace TNovClient
 
         private static bool DesktopShortcutExists() => GetDesktopShortcutPath() != null;
 
-        private static void StartWaitForInstallAndStartup()
-        {
-            if (Interlocked.CompareExchange(ref _installWaitRunning, 1, 0) != 0)
-                return;
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    bool installed = await WaitUntilShortcutExistsAsync(FirstInstallWait).ConfigureAwait(false);
-                    if (!installed)
-                    {
-                        Log("first install: shortcut not found within timeout");
-                        return;
-                    }
-
-                    EnsureDesktopAutostart();
-                    Log("first install: shortcut found, autostart registered");
-                }
-                catch (Exception ex)
-                {
-                    Log($"first install wait failed: {ex.Message}");
-                }
-                finally
-                {
-                    Interlocked.Exchange(ref _installWaitRunning, 0);
-                }
-            });
-        }
-
         private static async Task<bool> WaitUntilShortcutExistsAsync(TimeSpan timeout)
         {
             DateTime deadline = DateTime.UtcNow + timeout;
@@ -690,6 +550,9 @@ namespace TNovClient
             return GetDesktopShortcutPath() != null;
         }
 
+        /// <summary>
+        /// Один раз после явной установки по кнопке. Фон и обновления Run не трогают.
+        /// </summary>
         private static void EnsureDesktopAutostart()
         {
             string? shortcutPath = GetDesktopShortcutPath();

@@ -39,10 +39,11 @@ namespace TNovClient
                 if (config == null)
                     return false;
 
-                if (config.LicenseType == "corp" && !servercheck.ServerCheck())
+                if (config.IsCorp && !servercheck.ServerCheck())
                     return false;
 
-                string serverPath = ClientPaths.NormalizeServerPath(config.ServerPath);
+                // Личная конфигурация — из зеркала Google Drive (Updater копирует из локальной папки).
+                string serverPath = ClientPaths.UpdateRoot(config);
                 string serverFolder = ClientPaths.ServerClientFolder(serverPath);
                 if (!Directory.Exists(serverFolder))
                     return false;

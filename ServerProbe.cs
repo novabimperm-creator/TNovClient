@@ -54,7 +54,7 @@ namespace TNovClient
 
                 results[path] = probe;
                 Cache[path] = new CacheEntry(DateTime.UtcNow, probe.Reachable);
-                Log($"{path}: reachable={probe.Reachable} in {probe.Elapsed.TotalMilliseconds:0} ms");
+                //Log($"{path}: reachable={probe.Reachable} in {probe.Elapsed.TotalMilliseconds:0} ms");
             }
 
             return results;

@@ -31,7 +31,8 @@ namespace TNovClient
             try { Replace(); }
             catch (Exception ex) { Debug.WriteLine($"Updater failed: {ex}"); }
 
-            try { DesktopUpdateService.TryApplyPendingUpdate(); }
+            // TNovDesktop — только с корпоративной шары.
+            try { if (LoadConfig()?.IsCorp == true) DesktopUpdateService.TryApplyPendingUpdate(); }
             catch (Exception ex) { Debug.WriteLine($"Desktop updater failed: {ex}"); }
 
             try
@@ -77,7 +78,7 @@ namespace TNovClient
             if (config == null || !servercheck.ServerCheck())
                 return;
 
-            string serverPath = ClientPaths.NormalizeServerPath(config.ServerPath);
+            string serverPath = ClientPaths.UpdateRoot(config);
             bool revitRunning = AppRun();
             var installedDescriptions = new List<string>();
             var availableDescriptions = new List<string>();
@@ -306,8 +307,8 @@ namespace TNovClient
                 return;
             }
 
-            string serverPath = ClientPaths.NormalizeServerPath(config.ServerPath);
-            actualcompany = config.CorpName ?? string.Empty;
+            string serverPath = ClientPaths.UpdateRoot(config);
+            actualcompany = OfficeServers.IsPersonal(config) ? OfficeServers.PersonalName : config.CorpName ?? string.Empty;
 
             var currentParts = new List<string>();
             var actualParts = new List<string>();
@@ -368,8 +369,12 @@ namespace TNovClient
             try
             {
                 TNovConfig config = JsonConvert.DeserializeObject<TNovConfig>(File.ReadAllText(configPath));
-                if (OfficeServers.UpgradeLegacyPath(config))
+                bool upgraded = OfficeServers.UpgradeLegacyPath(config);
+                upgraded |= OfficeServers.FillPersonalDefaults(config);
+                if (upgraded)
                     SaveConfig(config);
+                else
+                    OfficeServers.RememberPersonalSource(config?.UpdateSource); // конфиг из архива с ServerPath
                 return config;
             }
             catch (JsonException ex)
@@ -397,22 +402,31 @@ namespace TNovClient
                     Directory.CreateDirectory(configDir);
 
                 // Смена офиса подставляет готовый конфиг из OfficeServers без настроек API —
-                // не теряем их: API один на оба офиса.
-                if (config.ApiUrl == null && File.Exists(configPath))
+                // не теряем их: API один на оба офиса. Так же сохраняем FileSync и параметры
+                // внешнего источника, заданные в файле вручную (пресет «Личная» может быть без них).
+                if (File.Exists(configPath))
                 {
                     try
                     {
                         TNovConfig? existing = JsonConvert.DeserializeObject<TNovConfig>(File.ReadAllText(configPath));
                         if (existing != null)
                         {
-                            config.ApiUrl = existing.ApiUrl;
-                            config.ApiKey ??= existing.ApiKey;
-                            config.ChecklistStorage ??= existing.ChecklistStorage;
+                            if (config.ApiUrl == null)
+                            {
+                                config.ApiUrl = existing.ApiUrl;
+                                config.ApiKey ??= existing.ApiKey;
+                                config.ChecklistStorage ??= existing.ChecklistStorage;
+                            }
+                            config.FileSync ??= existing.FileSync;
+                            if (config.UpdateSource != null && !config.UpdateSource.IsGoogleDrive
+                                && existing.UpdateSource?.IsGoogleDrive == true)
+                                config.UpdateSource = existing.UpdateSource;
                         }
                     }
                     catch (Exception) { }
                 }
 
+                OfficeServers.RememberPersonalSource(config.UpdateSource);
                 File.WriteAllText(configPath, JsonConvert.SerializeObject(config, Formatting.Indented,
                     new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore }));
                 return true;
@@ -578,7 +592,7 @@ namespace TNovClient
             private static void SyncRecentFiles(string sourceFolder, string targetFolder)
             {
                 TNovConfig config = LoadConfig();
-                if (config == null || config.LicenseType != "corp" || !servercheck.ServerCheck())
+                if (config == null || !config.IsCorp || !servercheck.ServerCheck())
                     return;
 
                 if (!Directory.Exists(sourceFolder) || !Directory.Exists(targetFolder))

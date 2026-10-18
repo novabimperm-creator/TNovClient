@@ -57,6 +57,7 @@ namespace TNovClient
 
         public App()
         {
+            ThemeService.Initialize();
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             {
                 string msg = (e.ExceptionObject as Exception)?.ToString() ?? "Неизвестная ошибка";
@@ -66,6 +67,9 @@ namespace TNovClient
                     File.AppendAllText(ClientPaths.CrashLogFile, $"{DateTime.Now:O}: {msg}{Environment.NewLine}");
                 }
                 catch { }
+
+                if (IsRuntimeRemoved())
+                    TerminateWithoutRuntime();
 
                 MessageBox.Show($"Критический сбой:\n{msg}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
                 Environment.Exit(1);
@@ -86,8 +90,46 @@ namespace TNovClient
         {
         }
 
+        /// <summary>
+        /// Файлы .NET, на котором запущен клиент, удалены (например, обновление Visual Studio/.NET
+        /// снесло старый патч рантайма, пока клиент висел в трее).
+        /// </summary>
+        private static bool IsRuntimeRemoved()
+        {
+            try
+            {
+                return !File.Exists(typeof(Application).Assembly.Location);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Штатный Shutdown/Environment.Exit без файлов рантайма падает на выгрузке
+        /// C++/CLI-модулей WPF (DllNotFoundException в __std_type_info_destroy_list),
+        /// поэтому процесс завершается сразу, без выгрузки домена.
+        /// </summary>
+        private static void TerminateWithoutRuntime()
+        {
+            try
+            {
+                (Current?.MainWindow as MainWindow)?.DisposeTrayIcon();
+            }
+            catch { }
+
+            Process.GetCurrentProcess().Kill();
+        }
+
         public static void ForceShutdown()
         {
+            if (IsRuntimeRemoved())
+            {
+                TerminateWithoutRuntime();
+                return;
+            }
+
             Application current = Current;
             if (current == null)
             {

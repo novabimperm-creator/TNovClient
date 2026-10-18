@@ -55,32 +55,15 @@ namespace TNovClient
         }
 
         /// <summary>
-        /// Папка с DLL на сервере. Для 2022 допускается fallback на legacy-layout.
+        /// Папка с DLL на сервере: actual\&lt;год&gt;\TNov (туда же публикует TNovReleaser).
         /// </summary>
         public static bool TryGetServerPluginFolder(string serverPath, int revitYear, out string folderPath)
         {
-            var candidates = new List<string>
+            string candidate = ClientPaths.ServerPluginFolder(serverPath, revitYear);
+            if (Directory.Exists(candidate) && Directory.EnumerateFiles(candidate).Any())
             {
-                ClientPaths.ServerPluginFolder(serverPath, revitYear)
-            };
-
-            if (revitYear == 2022)
-            {
-                candidates.Add(Path.Combine(ClientPaths.NormalizeServerPath(serverPath), "actual", "TNov"));
-#if config1
-                candidates.Add(Path.Combine(ClientPaths.NormalizeServerPath(serverPath), "actual", "config1", "TNov"));
-#elif config2
-                candidates.Add(Path.Combine(ClientPaths.NormalizeServerPath(serverPath), "actual", "config2", "TNov"));
-#endif
-            }
-
-            foreach (string candidate in candidates)
-            {
-                if (Directory.Exists(candidate) && Directory.EnumerateFiles(candidate).Any())
-                {
-                    folderPath = candidate;
-                    return true;
-                }
+                folderPath = candidate;
+                return true;
             }
 
             folderPath = null;

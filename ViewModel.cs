@@ -171,6 +171,15 @@ namespace TNovClient
         public ICommand ShowConfigurationPickerCommand { get; set; }
         public ICommand CloseConfigurationPickerCommand { get; set; }
         public ICommand SelectConfigurationCommand { get; set; }
+        public ICommand CollectLogsCommand { get; set; }
+
+        private bool _isPersonalConfig;
+        /// <summary>Личная конфигурация: логи остаются на ПК, видна кнопка «Собрать логи».</summary>
+        public bool IsPersonalConfig
+        {
+            get => _isPersonalConfig;
+            set { _isPersonalConfig = value; OnPropertyChanged(nameof(IsPersonalConfig)); }
+        }
 
         public ViewModel()
         {
@@ -179,6 +188,8 @@ namespace TNovClient
             ShowConfigurationPickerCommand = new RelayCommand(_ => OpenConfigurationPicker(), _ => true);
             CloseConfigurationPickerCommand = new RelayCommand(_ => ShowConfigurationPicker = false, _ => true);
             SelectConfigurationCommand = new RelayCommand(ApplyConfiguration, _ => true);
+            CollectLogsCommand = new RelayCommand(_ => LogCollector.CollectAndShow(), _ => true);
+            IsPersonalConfig = OfficeServers.IsPersonal(files.LoadConfig());
             files.OldVersionCheck(out string s1, out string s2, out string s3, out _, out Brush c1);
             currentversion = s1;
             actualversion = s2;
@@ -226,10 +237,24 @@ namespace TNovClient
             RefreshConfigurationInfo();
             ShowConfigurationPicker = false;
             LoadModules();
+            _ = SyncMirrorAfterSwitchAsync();
+        }
+
+        /// <summary>Личная конфигурация: сразу скачать зеркало, не дожидаясь цикла обновлений.</summary>
+        private async Task SyncMirrorAfterSwitchAsync()
+        {
+            TNovConfig? config = files.LoadConfig();
+            if (config?.UpdateSource?.IsGoogleDrive != true)
+                return;
+            await GoogleDriveMirror.SyncIfDueAsync(config, force: true);
+            RefreshConfigurationInfo();
+            LoadModules();
+            LoadReleases();
         }
 
         private void RefreshConfigurationInfo()
         {
+            IsPersonalConfig = OfficeServers.IsPersonal(files.LoadConfig());
             files.OldVersionCheck(out string s1, out string s2, out string s3, out _, out Brush c1);
             currentversion = s1;
             actualversion = s2;
@@ -241,6 +266,9 @@ namespace TNovClient
         {
             if (current == null || candidate == null)
                 return false;
+
+            if (OfficeServers.IsPersonal(current) || OfficeServers.IsPersonal(candidate))
+                return OfficeServers.IsPersonal(current) && OfficeServers.IsPersonal(candidate);
 
             return OfficeServers.PathsMatch(current.ServerPath, candidate.ServerPath);
         }
@@ -304,7 +332,7 @@ namespace TNovClient
                     {
                         new ModuleInfo
                         {
-                            Name = "Нет подключения",
+                            Name = NoModulesText(config),
                             CurrentVersion = "",
                             ActualVersion = "",
                             IsActual = false
@@ -313,13 +341,21 @@ namespace TNovClient
                     return;
                 }
 
-                string serverPath = ClientPaths.NormalizeServerPath(config.ServerPath);
+                string serverPath = ClientPaths.UpdateRoot(config);
                 var groupsByYear = new Dictionary<int, List<ModuleInfo>>();
                 bool anyModuleLoaded = false;
 
-                ModuleInfo desktopModule = CreateDesktopModule(serverPath);
-                WindowWidth = desktopModule.IsDesktopActionVisible ? 410 : 380;
-                ModuleGroups.Add(CreateGroup("TNovDesktop", new[] { desktopModule }));
+                // TNovDesktop ставится только с корпоративной шары (ClickOnce), в личную поставку не входит.
+                if (config.IsCorp)
+                {
+                    ModuleInfo desktopModule = CreateDesktopModule(serverPath);
+                    WindowWidth = desktopModule.IsDesktopActionVisible ? 410 : 380;
+                    ModuleGroups.Add(CreateGroup("TNovDesktop", new[] { desktopModule }));
+                }
+                else
+                {
+                    WindowWidth = 380;
+                }
 
                 foreach (int revitYear in RevitInstallHelper.GetDeployTargetYears(serverPath))
                 {
@@ -370,7 +406,7 @@ namespace TNovClient
                     {
                         new ModuleInfo
                         {
-                            Name = "Нет подключения",
+                            Name = NoModulesText(config),
                             CurrentVersion = "",
                             ActualVersion = "",
                             IsActual = false
@@ -402,6 +438,16 @@ namespace TNovClient
                 Modules = new ObservableCollection<ModuleInfo>(modules)
             };
 
+        /// <summary>Почему нечего показать: для личной конфигурации — понятнее, чем «Нет подключения».</summary>
+        private static string NoModulesText(TNovConfig config)
+        {
+            if (config.IsCorp)
+                return "Нет подключения";
+            if (config.UpdateSource?.IsGoogleDrive != true)
+                return "Не задан источник обновлений";
+            return GoogleDriveMirror.HasContent ? "На Google Drive нет плагина" : "Загрузка с Google Drive…";
+        }
+
         private static ModuleInfo CreateDesktopModule(string serverPath)
         {
             DesktopStatus status = DesktopUpdateService.GetStatus(serverPath);
@@ -419,13 +465,13 @@ namespace TNovClient
             {
                 module.DesktopActionText = "Установить";
                 module.DesktopActionWidth = 90;
-                module.DesktopActionToolTip = "Установит TNovDesktop через ClickOnce и добавит в автозагрузку";
+                module.DesktopActionToolTip = "Установит TNovDesktop через ClickOnce";
             }
             else if (!status.IsActual)
             {
                 module.DesktopActionText = "Обновить";
                 module.DesktopActionWidth = 90;
-                module.DesktopActionToolTip = "Закроет TNovDesktop и установит обновление через TNovClient";
+                module.DesktopActionToolTip = "Запустит установщик ClickOnce. Если TNovDesktop открыт — сначала закройте его через трей";
             }
 
             return module;
@@ -488,7 +534,7 @@ namespace TNovClient
 
             try
             {
-                string releasesFile = ClientPaths.ReleasesFile;
+                string releasesFile = ClientPaths.ReleasesFile(files.LoadConfig());
                 if (!ServerProbe.IsPathReachable(releasesFile))
                 {
                     JournalStatusMessage = "Журнал версий недоступен";

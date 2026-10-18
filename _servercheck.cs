@@ -13,8 +13,9 @@ namespace TNovClient
                 if (config == null)
                     return false;
 
-                if (config.LicenseType != "corp")
-                    return true;
+                // Личная конфигурация: «сервер» — зеркало внешнего источника, доступно, если уже скачано.
+                if (!config.IsCorp)
+                    return config.UpdateSource?.IsGoogleDrive == true ? GoogleDriveMirror.HasContent : true;
 
                 return ServerProbe.IsServerReachable(config.ServerPath);
             }

@@ -10,7 +10,8 @@ namespace TNovClient
             if (current == null || !IsCorp(current))
                 return false;
 
-            List<(string DisplayName, TNovConfig Config)> offices = OfficeServers.GetAll().ToList();
+            // Только офисы: на личную конфигурацию автоматически не переключаем.
+            List<(string DisplayName, TNovConfig Config)> offices = OfficeServers.GetAll().Where(o => IsCorp(o.Config)).ToList();
             string currentMarker = ServerProbe.MarkerPath(current.ServerPath);
             Dictionary<string, TimedProbe> currentResults = ServerProbe.ProbeMany(
                 new[] { currentMarker },

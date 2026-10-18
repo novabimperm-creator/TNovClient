@@ -2,10 +2,12 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using static TNovClient.files;
 
 namespace TNovClient
@@ -52,6 +54,7 @@ namespace TNovClient
             }
 
             Loaded += OnLoaded;
+            SourceInitialized += OnSourceInitialized;
             Closing += OnClosing;
             Closing += MyWindow_Closing;
             MainTabControl.SelectionChanged += MainTabControl_SelectionChanged;
@@ -64,10 +67,35 @@ namespace TNovClient
             _ = MonitorFoldersAsync(_cts.Token);
         }
 
+        private void OnSourceInitialized(object sender, EventArgs e)
+        {
+            if (PresentationSource.FromVisual(this) is HwndSource source)
+                source.AddHook(WndProc);
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            const int WM_SETTINGCHANGE = 0x001A;
+            if (msg == WM_SETTINGCHANGE)
+            {
+                string name = Marshal.PtrToStringAuto(lParam);
+                if (string.IsNullOrEmpty(name)
+                    || string.Equals(name, "ImmersiveColorSet", StringComparison.OrdinalIgnoreCase))
+                {
+                    ThemeService.Apply();
+                }
+            }
+
+            return IntPtr.Zero;
+        }
+
         private async Task RunUpdaterLoopAsync(CancellationToken token)
         {
             try
             {
+                // Личная конфигурация: сначала подтягиваем зеркало Google Drive (асинхронно,
+                // окно не блокируется), затем обычное обновление уже из зеркала.
+                await GoogleDriveMirror.SyncIfDueAsync(LoadConfig(), force: true, token: token);
                 Updater();
             }
             catch (Exception ex)
@@ -80,6 +108,7 @@ namespace TNovClient
                 try
                 {
                     await Task.Delay(10000, token);
+                    await GoogleDriveMirror.SyncIfDueAsync(LoadConfig(), token: token);
                     Updater();
                 }
                 catch (OperationCanceledException)
@@ -189,9 +218,11 @@ namespace TNovClient
 
         private void OpenMainWindow()
         {
+            ThemeService.Apply();
+
             var vm = (ViewModel)DataContext;
 
-            try { DesktopUpdateService.TryApplyPendingUpdate(); }
+            try { DesktopUpdateService.TryApplyPendingUpdate(ignoreCooldown: true); }
             catch (Exception ex) { Debug.WriteLine($"Desktop update on open failed: {ex}"); }
 
             if (vm.UpdCommand.CanExecute(null))
@@ -235,6 +266,7 @@ namespace TNovClient
 
         private void ShowWindow_Click(object sender, RoutedEventArgs e)
         {
+            ThemeService.Apply();
             Show();
             WindowState = WindowState.Normal;
             Activate();
@@ -242,7 +274,12 @@ namespace TNovClient
 
         private void ExitApp_Click(object sender, RoutedEventArgs e)
         {
-            Application.Current.Shutdown();
+            App.ForceShutdown();
+        }
+
+        internal void DisposeTrayIcon()
+        {
+            TrayIcon?.Dispose();
         }
     }
 }
