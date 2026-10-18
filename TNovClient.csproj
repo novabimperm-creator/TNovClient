@@ -19,7 +19,7 @@
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>true</Optimize>
-    <OutputPath>\\fs-nova\Distr\0.For Admin\_TNov\build\config1\</OutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)..\TNovBuild\client\config1\</OutputPath>
     <DefineConstants>TRACE;config1</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
@@ -29,7 +29,7 @@
     <DebugSymbols>true</DebugSymbols>
     <DebugType>full</DebugType>
     <Optimize>true</Optimize>
-    <OutputPath>\\fs-nova\Distr\0.For Admin\_TNov\build\config2\</OutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)..\TNovBuild\client\config2\</OutputPath>
     <DefineConstants>TRACE;config2</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>

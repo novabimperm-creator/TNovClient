@@ -20,8 +20,8 @@ namespace TNovClient
         public bool? FileSync { get; set; }
 
         /// <summary>
-        /// Внешний источник обновлений (личная конфигурация). null — обновления берутся
-        /// из {ServerPath}actual\ (корпоративная шара).
+        /// Переопределение манифеста обновлений (тесты). null — манифест по умолчанию:
+        /// {ServerPath}manifest.json для офиса, GitHub Pages для личной (ClientPaths.ManifestLocation).
         /// </summary>
         public UpdateSourceConfig? UpdateSource { get; set; }
 
@@ -29,23 +29,17 @@ namespace TNovClient
         public bool IsCorp =>string.Equals(LicenseType, "corp", StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>
-    /// Публичная папка Google Drive с той же структурой, что actual\ на шаре
-    /// (addin\, 2022\TNov\, 2027\TNov\, client\, clientversion.txt, releases, tnovapi.json).
-    /// Читается через Drive API v3 по API-ключу, без входа в Google.
-    /// </summary>
     public class UpdateSourceConfig
     {
+        /// <summary>Источник до перехода на GitHub — такой конфиг заменяется на манифест по умолчанию.</summary>
         public const string GoogleDriveType = "GoogleDrive";
 
         public string? Type { get; set; }
-        public string? FolderId { get; set; }
-        public string? ApiKey { get; set; }
+
+        /// <summary>Путь к manifest.json на шаре или https-адрес.</summary>
+        public string? ManifestUrl { get; set; }
 
         [Newtonsoft.Json.JsonIgnore]
-        public bool IsGoogleDrive =>
-            string.Equals(Type, GoogleDriveType, StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(FolderId)
-            && !string.IsNullOrWhiteSpace(ApiKey);
+        public bool IsLegacyGoogleDrive => string.Equals(Type, GoogleDriveType, StringComparison.OrdinalIgnoreCase);
     }
 }

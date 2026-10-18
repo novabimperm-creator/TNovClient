@@ -183,7 +183,7 @@ namespace TNovClient
 
         public ViewModel()
         {
-            UpdCommand = new RelayCommand(_ => LoadModules(), CanUpd);
+            UpdCommand = new RelayCommand(_ => { LoadModules(); _ = SyncMirrorAfterSwitchAsync(); }, CanUpd);
             DesktopRequestCommand = new RelayCommand(OpenDesktopInstallRequest, _ => true);
             ShowConfigurationPickerCommand = new RelayCommand(_ => OpenConfigurationPicker(), _ => true);
             CloseConfigurationPickerCommand = new RelayCommand(_ => ShowConfigurationPicker = false, _ => true);
@@ -240,13 +240,16 @@ namespace TNovClient
             _ = SyncMirrorAfterSwitchAsync();
         }
 
-        /// <summary>Личная конфигурация: сразу скачать зеркало, не дожидаясь цикла обновлений.</summary>
+        /// <summary>
+        /// Сразу перечитать манифест (смена конфигурации, кнопка обновления), не дожидаясь
+        /// цикла обновлений: для личной он ходит на GitHub Pages раз в несколько часов.
+        /// </summary>
         private async Task SyncMirrorAfterSwitchAsync()
         {
             TNovConfig? config = files.LoadConfig();
-            if (config?.UpdateSource?.IsGoogleDrive != true)
+            if (config == null)
                 return;
-            await GoogleDriveMirror.SyncIfDueAsync(config, force: true);
+            await ManifestMirror.SyncIfDueAsync(config, force: true);
             RefreshConfigurationInfo();
             LoadModules();
             LoadReleases();
@@ -326,7 +329,7 @@ namespace TNovClient
                     return;
                 }
 
-                if (!servercheck.ServerCheck())
+                if (!servercheck.UpdatesAvailable())
                 {
                     ModuleGroups.Add(CreateGroup("Статус", new[]
                     {
@@ -346,9 +349,10 @@ namespace TNovClient
                 bool anyModuleLoaded = false;
 
                 // TNovDesktop ставится только с корпоративной шары (ClickOnce), в личную поставку не входит.
-                if (config.IsCorp)
+                if (config.IsCorp && servercheck.ServerCheck())
                 {
-                    ModuleInfo desktopModule = CreateDesktopModule(serverPath);
+                    // TNovDesktop (ClickOnce) не входит в манифест — всегда с шары, вне офиса не показываем.
+                    ModuleInfo desktopModule = CreateDesktopModule(ClientPaths.NormalizeServerPath(config.ServerPath));
                     WindowWidth = desktopModule.IsDesktopActionVisible ? 410 : 380;
                     ModuleGroups.Add(CreateGroup("TNovDesktop", new[] { desktopModule }));
                 }
@@ -443,9 +447,7 @@ namespace TNovClient
         {
             if (config.IsCorp)
                 return "Нет подключения";
-            if (config.UpdateSource?.IsGoogleDrive != true)
-                return "Не задан источник обновлений";
-            return GoogleDriveMirror.HasContent ? "На Google Drive нет плагина" : "Загрузка с Google Drive…";
+            return ManifestMirror.HasContent ? "В выпуске нет плагина" : "Загрузка обновлений с GitHub…";
         }
 
         private static ModuleInfo CreateDesktopModule(string serverPath)
@@ -576,7 +578,7 @@ namespace TNovClient
             LoadReleases();
         }
 
-        private bool CanUpd(object param) => servercheck.ServerCheck();
+        private bool CanUpd(object param) => servercheck.UpdatesAvailable();
 
         public event PropertyChangedEventHandler PropertyChanged;
 

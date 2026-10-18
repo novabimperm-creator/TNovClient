@@ -43,46 +43,47 @@ namespace TNovClient
         }
 
         /// <summary>
+        /// Личный манифест на GitHub Pages (публикует TNovReleaser --promote).
+        /// Должен совпадать с AppConfig.PersonalManifestUrl в TNovReleaser.
+        /// </summary>
+        public const string PersonalManifestUrl = "https://novabimperm-creator.github.io/TNovDist/manifest.json";
+
+        /// <summary>
+        /// Корпоративный манифест на GitHub Pages (основная копия, пишет TNovReleaser).
+        /// В офисе клиенты читают его копию на шаре ({ServerPath}manifest.json) и по очереди
+        /// её обновляют (ManifestMirror); вне офиса — читают Pages напрямую, редко.
+        /// Должен совпадать с AppConfig.CorpManifestUrl в TNovReleaser.
+        /// </summary>
+        public const string CorpManifestUrl = "https://novabimperm-creator.github.io/TNovDist/corp/manifest.json";
+
+        /// <summary>
         /// Личная конфигурация (тесты вне сети компании): данные плагина — в папке TNovClient,
-        /// обновления — из публичной папки Google Drive (GoogleDriveMirror).
+        /// обновления — по личному манифесту с GitHub (ManifestMirror).
         /// </summary>
         public static TNovConfig CreatePersonalConfig() => new()
         {
             LicenseType = PersonalLicenseType,
             CorpName = "",
-            ServerPath = ClientPaths.PersonalServerPath,
-            // ID папки и ключ в коде не храним (репозитории публичные): они приходят
-            // в TNovConfig.json из архива install-personal и запоминаются в TNovPersonal.json.
-            UpdateSource = LoadPersonalSource() ?? new UpdateSourceConfig { Type = UpdateSourceConfig.GoogleDriveType }
+            ServerPath = ClientPaths.PersonalServerPath
         };
 
-        /// <summary>Запомненный источник личной конфигурации (null — личная ещё не настраивалась).</summary>
-        public static UpdateSourceConfig? LoadPersonalSource()
-        {
-            try
-            {
-                if (!File.Exists(ClientPaths.PersonalSourceFile))
-                    return null;
-                var source = JsonConvert.DeserializeObject<UpdateSourceConfig>(File.ReadAllText(ClientPaths.PersonalSourceFile));
-                return source?.IsGoogleDrive == true ? source : null;
-            }
-            catch (Exception) { return null; }
-        }
-
-        /// <summary>Запомнить источник, чтобы пункт «Личная» работал и после переключения на офис.</summary>
-        public static void RememberPersonalSource(UpdateSourceConfig? source)
-        {
-            if (source?.IsGoogleDrive != true)
-                return;
-            try
-            {
-                File.WriteAllText(ClientPaths.PersonalSourceFile, JsonConvert.SerializeObject(source, Formatting.Indented));
-            }
-            catch (Exception) { }
-        }
-
         public static bool IsPersonal(TNovConfig? config) =>
-            config != null && !config.IsCorp && config.UpdateSource != null;
+            config != null && !config.IsCorp;
+
+        /// <summary>
+        /// Источник Google Drive (до перехода на GitHub) убираем: обновления пойдут
+        /// по манифесту по умолчанию. Возвращает true, если конфиг изменён.
+        /// </summary>
+        public static bool UpgradeLegacySource(TNovConfig? config)
+        {
+            if (config?.UpdateSource == null
+                || (!config.UpdateSource.IsLegacyGoogleDrive && !string.IsNullOrWhiteSpace(config.UpdateSource.ManifestUrl)))
+                return false;
+            config.UpdateSource = null;
+            try { File.Delete(Path.Combine(ClientPaths.ClientFolder, "TNovPersonal.json")); }
+            catch (Exception) { }
+            return true;
+        }
 
         /// <summary>
         /// Личный конфиг без ServerPath (например, из архива install-personal) — подставляем
@@ -97,18 +98,12 @@ namespace TNovClient
             return true;
         }
 
-        /// <summary>Офисы и — если источник известен — личная конфигурация.</summary>
-        public static IReadOnlyList<(string DisplayName, TNovConfig Config)> GetAll()
+        public static IReadOnlyList<(string DisplayName, TNovConfig Config)> GetAll() => new List<(string, TNovConfig)>
         {
-            var all = new List<(string, TNovConfig)>
-            {
-                (PermName, CreatePermConfig()),
-                (KhabarovskName, CreateKhabarovskConfig())
-            };
-            if (LoadPersonalSource() != null)
-                all.Add((PersonalName, CreatePersonalConfig()));
-            return all;
-        }
+            (PermName, CreatePermConfig()),
+            (KhabarovskName, CreateKhabarovskConfig()),
+            (PersonalName, CreatePersonalConfig())
+        };
 
         public static TNovConfig CreateDefaultConfig()
         {

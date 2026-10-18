@@ -17,13 +17,13 @@
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'config1|AnyCPU'">
     <Optimize>true</Optimize>
-    <OutputPath>\\fs-nova\Distr\0.For Admin\_TNov\build\config1\</OutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\TNovBuild\client\config1\</OutputPath>
     <DefineConstants>TRACE;config1</DefineConstants>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'config2|AnyCPU'">
     <Optimize>true</Optimize>
-    <OutputPath>\\fs-nova\Distr\0.For Admin\_TNov\build\config2\</OutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\TNovBuild\client\config2\</OutputPath>
     <DefineConstants>TRACE;config2</DefineConstants>
   </PropertyGroup>
 

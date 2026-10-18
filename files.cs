@@ -13,15 +13,6 @@ namespace TNovClient
 {
     public static class files
     {
-        /// <summary>
-        /// Зависимости, которые синхронизируются с сервером даже при «более новой» локальной версии.
-        /// System.Resources.Extensions 8.x ломает загрузку preserialized .resx (нужна 4.0.0.0).
-        /// </summary>
-        private static readonly HashSet<string> ForceSyncDependencies = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "System.Resources.Extensions.dll"
-        };
-
         public static string clientFolderPath => ClientPaths.ClientFolder;
 
         public static void Updater()
@@ -75,7 +66,7 @@ namespace TNovClient
         public static void Replace()
         {
             TNovConfig config = LoadConfig();
-            if (config == null || !servercheck.ServerCheck())
+            if (config == null || !servercheck.UpdatesAvailable())
                 return;
 
             string serverPath = ClientPaths.UpdateRoot(config);
@@ -167,22 +158,7 @@ namespace TNovClient
                 {
                     string localFile = Path.Combine(ClientPaths.LocalPluginFolder(revitYear), file);
                     string serverFile = Path.Combine(serverPluginFolder, file);
-
-                    if (ShouldForceSyncDependency(file, localFile, serverFile))
-                    {
-                        filesToCopy.Add(file);
-                        continue;
-                    }
-
-                    if (!File.Exists(localFile))
-                    {
-                        filesToCopy.Add(file);
-                        continue;
-                    }
-
-                    string currentVersion = FileVersionInfo.GetVersionInfo(localFile).ProductVersion;
-                    string actualVersion = FileVersionInfo.GetVersionInfo(serverFile).ProductVersion;
-                    if (IsServerProductVersionNewer(currentVersion, actualVersion))
+                    if (FilesDiffer(localFile, serverFile))
                         filesToCopy.Add(file);
                 }
 
@@ -239,34 +215,17 @@ namespace TNovClient
             return descriptions.Count > 0;
         }
 
-        private static bool ShouldForceSyncDependency(string fileName, string localFile, string serverFile)
+        /// <summary>
+        /// Файлы различаются по содержимому. Решает хэш, а не версия: так доходят откат
+        /// выпуска и зависимости без смены версии (System.Resources.Extensions и т.п.).
+        /// </summary>
+        internal static bool FilesDiffer(string localFile, string serverFile)
         {
-            if (!ForceSyncDependencies.Contains(fileName) || !File.Exists(serverFile))
-                return false;
-
             if (!File.Exists(localFile))
                 return true;
-
-            Version? localVersion = TryGetAssemblyVersion(localFile);
-            Version? serverVersion = TryGetAssemblyVersion(serverFile);
-
-            if (localVersion == null || serverVersion == null)
-                return new FileInfo(localFile).Length != new FileInfo(serverFile).Length;
-
-            return localVersion != serverVersion;
-        }
-
-        private static Version? TryGetAssemblyVersion(string assemblyPath)
-        {
-            try
-            {
-                return AssemblyName.GetAssemblyName(assemblyPath).Version;
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"TryGetAssemblyVersion failed ({assemblyPath}): {ex.Message}");
-                return null;
-            }
+            if (new FileInfo(localFile).Length != new FileInfo(serverFile).Length)
+                return true;
+            return !string.Equals(ManifestMirror.ComputeSha256(localFile), ManifestMirror.ComputeSha256(serverFile), StringComparison.Ordinal);
         }
 
         private static void CopyAddinFile(string serverPath, int revitYear)
@@ -297,7 +256,7 @@ namespace TNovClient
                 return;
             }
 
-            if (!servercheck.ServerCheck())
+            if (!servercheck.UpdatesAvailable())
             {
                 currentversion = "Нет подключения";
                 actualversion = "-";
@@ -371,10 +330,9 @@ namespace TNovClient
                 TNovConfig config = JsonConvert.DeserializeObject<TNovConfig>(File.ReadAllText(configPath));
                 bool upgraded = OfficeServers.UpgradeLegacyPath(config);
                 upgraded |= OfficeServers.FillPersonalDefaults(config);
+                upgraded |= OfficeServers.UpgradeLegacySource(config);
                 if (upgraded)
                     SaveConfig(config);
-                else
-                    OfficeServers.RememberPersonalSource(config?.UpdateSource); // конфиг из архива с ServerPath
                 return config;
             }
             catch (JsonException ex)
@@ -402,8 +360,7 @@ namespace TNovClient
                     Directory.CreateDirectory(configDir);
 
                 // Смена офиса подставляет готовый конфиг из OfficeServers без настроек API —
-                // не теряем их: API один на оба офиса. Так же сохраняем FileSync и параметры
-                // внешнего источника, заданные в файле вручную (пресет «Личная» может быть без них).
+                // не теряем их: API один на оба офиса. Так же сохраняем FileSync, заданный в файле вручную.
                 if (File.Exists(configPath))
                 {
                     try
@@ -418,15 +375,11 @@ namespace TNovClient
                                 config.ChecklistStorage ??= existing.ChecklistStorage;
                             }
                             config.FileSync ??= existing.FileSync;
-                            if (config.UpdateSource != null && !config.UpdateSource.IsGoogleDrive
-                                && existing.UpdateSource?.IsGoogleDrive == true)
-                                config.UpdateSource = existing.UpdateSource;
                         }
                     }
                     catch (Exception) { }
                 }
 
-                OfficeServers.RememberPersonalSource(config.UpdateSource);
                 File.WriteAllText(configPath, JsonConvert.SerializeObject(config, Formatting.Indented,
                     new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore }));
                 return true;

@@ -39,25 +39,21 @@ namespace TNovClient
                 if (config == null)
                     return false;
 
-                if (config.IsCorp && !servercheck.ServerCheck())
+                if (!servercheck.UpdatesAvailable())
                     return false;
 
-                // Личная конфигурация — из зеркала Google Drive (Updater копирует из локальной папки).
+                // Клиент берётся из зеркала по манифесту (Updater копирует из локальной папки).
                 string serverPath = ClientPaths.UpdateRoot(config);
                 string serverFolder = ClientPaths.ServerClientFolder(serverPath);
-                if (!Directory.Exists(serverFolder))
+                string serverDll = Path.Combine(serverFolder, "TNovClient.dll");
+                if (!File.Exists(serverDll))
                     return false;
 
-                // Сравниваем с PE серверного бинарника (то, что реально копируется).
-                // clientversion.txt не должен запускать цикл, если на шаре ещё старый dll.
-                Version? actual = ReadServerBinaryVersion(serverPath, serverFolder);
-                Version? local = ReadLocalVersion();
-                if (actual == null)
-                    return false;
-                if (local != null && local.CompareTo(actual) >= 0)
+                // Решает хэш (как для плагина): доходит и откат версии. Версии — только для журнала.
+                if (!files.FilesDiffer(ClientPaths.LocalClientDll, serverDll))
                     return false;
 
-                Log($"self-update needed: local={FormatVersion(local)} server={FormatVersion(actual)}");
+                Log($"self-update needed: local={FormatVersion(ReadLocalVersion())} server={FormatVersion(TryReadPeFileVersion(serverDll))}");
                 return LaunchHelper(serverFolder);
             }
             catch (Exception ex)
@@ -74,32 +70,6 @@ namespace TNovClient
                 return fromDll;
 
             return System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-        }
-
-        private static Version? ReadServerBinaryVersion(string serverPath, string serverFolder)
-        {
-            Version? fromBinary = TryReadPeFileVersion(Path.Combine(serverFolder, "TNovClient.dll"))
-                ?? TryReadPeFileVersion(Path.Combine(serverFolder, "TNovClient.exe"));
-            if (fromBinary == null)
-                return null;
-
-            // Расхождение с clientversion.txt только логируем — решение всегда по бинарнику.
-            try
-            {
-                string versionFile = ClientPaths.ServerClientVersionFile(serverPath);
-                if (File.Exists(versionFile)
-                    && files.TryParseProductVersion(File.ReadAllText(versionFile), out Version fromFile)
-                    && fromFile.CompareTo(fromBinary) != 0)
-                {
-                    Log($"clientversion.txt={FormatVersion(fromFile)} != server binary={FormatVersion(fromBinary)}; using binary");
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"clientversion.txt check failed: {ex.Message}");
-            }
-
-            return fromBinary;
         }
 
         private static string FormatVersion(Version? version) =>

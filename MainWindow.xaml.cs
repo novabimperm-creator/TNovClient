@@ -93,9 +93,9 @@ namespace TNovClient
         {
             try
             {
-                // Личная конфигурация: сначала подтягиваем зеркало Google Drive (асинхронно,
+                // Сначала подтягиваем зеркало по манифесту (асинхронно,
                 // окно не блокируется), затем обычное обновление уже из зеркала.
-                await GoogleDriveMirror.SyncIfDueAsync(LoadConfig(), force: true, token: token);
+                await ManifestMirror.SyncIfDueAsync(LoadConfig(), force: true, token: token);
                 Updater();
             }
             catch (Exception ex)
@@ -108,7 +108,7 @@ namespace TNovClient
                 try
                 {
                     await Task.Delay(10000, token);
-                    await GoogleDriveMirror.SyncIfDueAsync(LoadConfig(), token: token);
+                    await ManifestMirror.SyncIfDueAsync(LoadConfig(), token: token);
                     Updater();
                 }
                 catch (OperationCanceledException)
